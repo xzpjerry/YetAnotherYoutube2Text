@@ -1,0 +1,8 @@
+# requirements.txt
+fastapi==0.111.1
+uvicorn[standard]==0.30.5
+ffmpeg-python==0.2.0
+python-multipart==0.0.9
+jinja2
+mlx-whisper
+yt-dlp

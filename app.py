@@ -177,6 +177,71 @@ INDEX_HTML = Template("""
 </script>
 """)
 
+def _is_hf_repo_id(value: str) -> bool:
+    return bool(re.fullmatch(r"[\w.-]+/[\w.-]+", value))
+
+def _check_ffmpeg_binary() -> str:
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        raise RuntimeError(
+            "`ffmpeg` executable was not found in PATH. Install ffmpeg and restart the app."
+        )
+    return ffmpeg_path
+
+def _check_model_location() -> str:
+    configured = (MODEL_PATH or "").strip()
+    if not configured:
+        raise RuntimeError("`MLX_WHISPER_MODEL` is empty.")
+
+    resolved = os.path.abspath(os.path.expanduser(configured))
+    if os.path.exists(resolved):
+        return resolved
+    if _is_hf_repo_id(configured):
+        return configured
+
+    raise RuntimeError(
+        f"Model path is invalid: {configured}. Set `MLX_WHISPER_MODEL` to an existing local path "
+        "or a Hugging Face repo id (for example: mlx-community/whisper-large-v3-turbo)."
+    )
+
+def _check_artifacts_dir() -> str:
+    os.makedirs(ARTIFACTS_DIR, exist_ok=True)
+    probe_path = None
+    fd = None
+    try:
+        fd, probe_path = tempfile.mkstemp(prefix=".write-check-", dir=ARTIFACTS_DIR)
+    except OSError as e:
+        raise RuntimeError(f"`{ARTIFACTS_DIR}` is not writable: {e}") from e
+    finally:
+        if fd is not None:
+            os.close(fd)
+        if probe_path and os.path.exists(probe_path):
+            os.unlink(probe_path)
+    return ARTIFACTS_DIR
+
+def _run_environment_checks():
+    checks = {}
+    errors = []
+    for key, checker in (
+        ("ffmpeg", _check_ffmpeg_binary),
+        ("model", _check_model_location),
+        ("artifacts", _check_artifacts_dir),
+    ):
+        try:
+            checks[key] = {"ok": True, "detail": checker()}
+        except Exception as e:
+            msg = str(e)
+            checks[key] = {"ok": False, "detail": msg}
+            errors.append(f"{key}: {msg}")
+    return checks, errors
+
+@app.on_event("startup")
+def validate_environment_on_startup():
+    _, errors = _run_environment_checks()
+    if errors:
+        bullet_list = "\n".join(f"- {item}" for item in errors)
+        raise RuntimeError(f"Startup checks failed:\n{bullet_list}")
+
 def _safe_slug(s: str) -> str:
     # Normalize unicode
     s = unicodedata.normalize("NFKC", s)
@@ -225,14 +290,8 @@ def _download_best_audio(youtube_url: str, tmpdir: str) -> str:
         "outtmpl": os.path.join(tmpdir, "%(title)s.%(ext)s"),
         "quiet": True,
         "no_warnings": True,
-        "format": "bestaudio*/140/251",
-        # "cookiesfrombrowser": ("chrome",),
-        "noplaylist": True,
-        "extractor_args": {
-            "youtube": {
-                "player_client": ["android", "ios", "web"]
-            }
-        },
+        "format": "bestaudio/best",
+        "cookiesfrombrowser": ("chrome",),
     }
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(youtube_url, download=True)
@@ -264,6 +323,13 @@ def _transcribe(mp3_path: str, language_hint: str | None) -> Dict:
 @app.get("/", response_class=HTMLResponse)
 def index():
     return INDEX_HTML.render(result=None)
+
+@app.get("/healthz")
+def healthz():
+    checks, errors = _run_environment_checks()
+    status_code = 200 if not errors else 503
+    status = "ok" if not errors else "error"
+    return JSONResponse({"status": status, "checks": checks}, status_code=status_code)
 
 @app.post("/transcribe", response_class=HTMLResponse)
 def transcribe_page(youtube_url: str = Form(...), language: str = Form(default="")):

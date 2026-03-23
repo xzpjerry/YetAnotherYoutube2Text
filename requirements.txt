@@ -6,3 +6,4 @@ python-multipart==0.0.9
 jinja2
 mlx-whisper
 yt-dlp
+yt-dlp-ejs

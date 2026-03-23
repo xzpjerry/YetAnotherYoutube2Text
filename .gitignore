@@ -4,3 +4,4 @@ artifacts/
 .DS_Store
 .vscode/settings.json
 .superpowers
+.worktrees/

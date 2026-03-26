@@ -1,0 +1,2 @@
+"""whisper_transcriber package."""
+

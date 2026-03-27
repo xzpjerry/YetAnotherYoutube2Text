@@ -158,62 +158,72 @@ class JobStore:
             return None
         return _row_to_job(claimed)
 
-    def heartbeat(self, job_id: str, stage: str, message: str) -> None:
+    def heartbeat(
+        self,
+        job_id: str,
+        worker_id: str,
+        stage: str,
+        message: str,
+    ) -> bool:
         now = utc_now().isoformat()
         with connect_db(self.db_path) as conn:
-            conn.execute(
-                """
-                UPDATE jobs
-                SET progress_stage = ?,
-                    status_message = ?,
-                    last_heartbeat_at = ?
-                WHERE job_id = ?
-                """,
-                (stage, message, now, job_id),
+            return _update_owned_running_job(
+                conn,
+                job_id=job_id,
+                worker_id=worker_id,
+                fields={
+                    "progress_stage": stage,
+                    "status_message": message,
+                    "last_heartbeat_at": now,
+                },
             )
-            conn.commit()
 
     def mark_completed(
         self,
         job_id: str,
+        worker_id: str,
         artifact_dir: str | None,
         message: str = "Completed",
-    ) -> None:
+    ) -> bool:
         now = utc_now().isoformat()
         with connect_db(self.db_path) as conn:
-            conn.execute(
-                """
-                UPDATE jobs
-                SET status = ?,
-                    progress_stage = ?,
-                    status_message = ?,
-                    finished_at = ?,
-                    last_heartbeat_at = ?,
-                    artifact_dir = ?
-                WHERE job_id = ?
-                """,
-                ("completed", "completed", message, now, now, artifact_dir, job_id),
+            return _update_owned_running_job(
+                conn,
+                job_id=job_id,
+                worker_id=worker_id,
+                fields={
+                    "status": "completed",
+                    "progress_stage": "completed",
+                    "status_message": message,
+                    "finished_at": now,
+                    "last_heartbeat_at": now,
+                    "artifact_dir": artifact_dir,
+                },
             )
-            conn.commit()
 
-    def mark_failed(self, job_id: str, error_code: str, message: str) -> None:
+    def mark_failed(
+        self,
+        job_id: str,
+        worker_id: str,
+        error_code: str,
+        message: str,
+    ) -> bool:
         now = utc_now().isoformat()
         with connect_db(self.db_path) as conn:
-            conn.execute(
-                """
-                UPDATE jobs
-                SET status = ?,
-                    progress_stage = ?,
-                    status_message = ?,
-                    finished_at = ?,
-                    last_heartbeat_at = ?,
-                    last_error_code = ?,
-                    last_error_message = ?
-                WHERE job_id = ?
-                """,
-                ("failed", "failed", message, now, now, error_code, message, job_id),
+            return _update_owned_running_job(
+                conn,
+                job_id=job_id,
+                worker_id=worker_id,
+                fields={
+                    "status": "failed",
+                    "progress_stage": "failed",
+                    "status_message": message,
+                    "finished_at": now,
+                    "last_heartbeat_at": now,
+                    "last_error_code": error_code,
+                    "last_error_message": message,
+                },
             )
-            conn.commit()
 
     def requeue_stale_jobs(self, heartbeat_timeout_seconds: int) -> int:
         with connect_db(self.db_path) as conn:
@@ -245,6 +255,28 @@ def _requeue_stale_jobs(conn: sqlite3.Connection, heartbeat_timeout_seconds: int
         ),
     )
     return cursor.rowcount
+
+
+def _update_owned_running_job(
+    conn: sqlite3.Connection,
+    job_id: str,
+    worker_id: str,
+    fields: dict[str, str | None],
+) -> bool:
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    values = list(fields.values()) + [job_id, worker_id]
+    cursor = conn.execute(
+        f"""
+        UPDATE jobs
+        SET {assignments}
+        WHERE job_id = ?
+          AND status = 'running'
+          AND worker_id = ?
+        """,
+        values,
+    )
+    conn.commit()
+    return cursor.rowcount == 1
 
 
 def _row_to_job(row: sqlite3.Row) -> JobRecord:

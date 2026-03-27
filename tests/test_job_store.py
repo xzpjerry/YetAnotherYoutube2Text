@@ -32,6 +32,14 @@ def test_load_settings_uses_expected_defaults(tmp_path, monkeypatch):
     assert settings.heartbeat_seconds == 5
 
 
+def test_load_settings_with_explicit_empty_mapping_uses_defaults(monkeypatch):
+    monkeypatch.setenv("DB_PATH", "/tmp/ambient.sqlite3")
+
+    settings = load_settings({})
+
+    assert str(settings.db_path) == "data/transcriber.sqlite3"
+
+
 def test_ensure_schema_creates_jobs_table(tmp_path):
     db_path = tmp_path / "jobs.sqlite3"
 
@@ -189,10 +197,16 @@ def test_heartbeat_updates_stage_message_and_timestamp(tmp_path):
     )
     assert claimed is not None
 
-    store.heartbeat(created.job_id, stage="transcribing", message="50% complete")
+    updated = store.heartbeat(
+        created.job_id,
+        worker_id="worker-1",
+        stage="transcribing",
+        message="50% complete",
+    )
 
     refreshed = store.get_job(created.job_id)
 
+    assert updated is True
     assert refreshed is not None
     assert refreshed.progress_stage == "transcribing"
     assert refreshed.status_message == "50% complete"
@@ -212,14 +226,16 @@ def test_mark_completed_records_artifact_dir_and_finish_time(tmp_path):
     )
     assert claimed is not None
 
-    store.mark_completed(
+    updated = store.mark_completed(
         created.job_id,
+        worker_id="worker-1",
         artifact_dir="artifacts/completed-job",
         message="Done",
     )
 
     refreshed = store.get_job(created.job_id)
 
+    assert updated is True
     assert refreshed is not None
     assert refreshed.status == "completed"
     assert refreshed.progress_stage == "completed"
@@ -241,14 +257,16 @@ def test_mark_failed_records_error_details_and_finish_time(tmp_path):
     )
     assert claimed is not None
 
-    store.mark_failed(
+    updated = store.mark_failed(
         created.job_id,
+        worker_id="worker-1",
         error_code="download_error",
         message="Could not fetch media",
     )
 
     refreshed = store.get_job(created.job_id)
 
+    assert updated is True
     assert refreshed is not None
     assert refreshed.status == "failed"
     assert refreshed.progress_stage == "failed"
@@ -256,3 +274,65 @@ def test_mark_failed_records_error_details_and_finish_time(tmp_path):
     assert refreshed.last_error_code == "download_error"
     assert refreshed.last_error_message == "Could not fetch media"
     assert refreshed.finished_at is not None
+
+
+def test_stale_worker_cannot_mutate_job_after_requeue_and_reclaim(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    created = store.create_job(
+        youtube_url="https://youtu.be/reclaimed",
+        display_title="Reclaimed",
+        language_hint=None,
+    )
+
+    claimed_by_a = store.claim_next_job(
+        worker_id="worker-a",
+        heartbeat_timeout_seconds=30,
+    )
+    assert claimed_by_a is not None
+
+    stale_time = datetime.now(timezone.utc) - timedelta(seconds=120)
+    with sqlite3.connect(tmp_path / "jobs.sqlite3") as conn:
+        conn.execute(
+            "UPDATE jobs SET last_heartbeat_at = ? WHERE job_id = ?",
+            (stale_time.isoformat(), created.job_id),
+        )
+        conn.commit()
+
+    assert store.requeue_stale_jobs(heartbeat_timeout_seconds=30) == 1
+
+    claimed_by_b = store.claim_next_job(
+        worker_id="worker-b",
+        heartbeat_timeout_seconds=30,
+    )
+    assert claimed_by_b is not None
+    assert claimed_by_b.job_id == created.job_id
+
+    completed = store.mark_completed(
+        created.job_id,
+        worker_id="worker-a",
+        artifact_dir="artifacts/reclaimed",
+        message="stale worker completion",
+    )
+    heartbeated = store.heartbeat(
+        created.job_id,
+        worker_id="worker-a",
+        stage="transcribing",
+        message="stale heartbeat",
+    )
+    failed = store.mark_failed(
+        created.job_id,
+        worker_id="worker-a",
+        error_code="stale",
+        message="stale failure",
+    )
+
+    refreshed = store.get_job(created.job_id)
+
+    assert completed is False
+    assert heartbeated is False
+    assert failed is False
+    assert refreshed is not None
+    assert refreshed.status == "running"
+    assert refreshed.progress_stage == "claimed"
+    assert refreshed.status_message == "Claimed by worker worker-b"
+    assert refreshed.worker_id == "worker-b"

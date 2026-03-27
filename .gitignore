@@ -1,6 +1,7 @@
 *.pyc
 __pycache__/
 artifacts/
+data/
 .DS_Store
 .vscode/settings.json
 .superpowers

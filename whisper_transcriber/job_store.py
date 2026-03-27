@@ -162,6 +162,7 @@ class JobStore:
         self,
         job_id: str,
         worker_id: str,
+        claim_attempt_count: int,
         stage: str,
         message: str,
     ) -> bool:
@@ -171,6 +172,7 @@ class JobStore:
                 conn,
                 job_id=job_id,
                 worker_id=worker_id,
+                claim_attempt_count=claim_attempt_count,
                 fields={
                     "progress_stage": stage,
                     "status_message": message,
@@ -182,6 +184,7 @@ class JobStore:
         self,
         job_id: str,
         worker_id: str,
+        claim_attempt_count: int,
         artifact_dir: str | None,
         message: str = "Completed",
     ) -> bool:
@@ -191,6 +194,7 @@ class JobStore:
                 conn,
                 job_id=job_id,
                 worker_id=worker_id,
+                claim_attempt_count=claim_attempt_count,
                 fields={
                     "status": "completed",
                     "progress_stage": "completed",
@@ -205,6 +209,7 @@ class JobStore:
         self,
         job_id: str,
         worker_id: str,
+        claim_attempt_count: int,
         error_code: str,
         message: str,
     ) -> bool:
@@ -214,6 +219,7 @@ class JobStore:
                 conn,
                 job_id=job_id,
                 worker_id=worker_id,
+                claim_attempt_count=claim_attempt_count,
                 fields={
                     "status": "failed",
                     "progress_stage": "failed",
@@ -261,10 +267,11 @@ def _update_owned_running_job(
     conn: sqlite3.Connection,
     job_id: str,
     worker_id: str,
+    claim_attempt_count: int,
     fields: dict[str, str | None],
 ) -> bool:
     assignments = ", ".join(f"{column} = ?" for column in fields)
-    values = list(fields.values()) + [job_id, worker_id]
+    values = list(fields.values()) + [job_id, worker_id, claim_attempt_count]
     cursor = conn.execute(
         f"""
         UPDATE jobs
@@ -272,6 +279,7 @@ def _update_owned_running_job(
         WHERE job_id = ?
           AND status = 'running'
           AND worker_id = ?
+          AND attempt_count = ?
         """,
         values,
     )

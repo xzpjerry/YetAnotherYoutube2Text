@@ -200,6 +200,7 @@ def test_heartbeat_updates_stage_message_and_timestamp(tmp_path):
     updated = store.heartbeat(
         created.job_id,
         worker_id="worker-1",
+        claim_attempt_count=claimed.attempt_count,
         stage="transcribing",
         message="50% complete",
     )
@@ -229,6 +230,7 @@ def test_mark_completed_records_artifact_dir_and_finish_time(tmp_path):
     updated = store.mark_completed(
         created.job_id,
         worker_id="worker-1",
+        claim_attempt_count=claimed.attempt_count,
         artifact_dir="artifacts/completed-job",
         message="Done",
     )
@@ -260,6 +262,7 @@ def test_mark_failed_records_error_details_and_finish_time(tmp_path):
     updated = store.mark_failed(
         created.job_id,
         worker_id="worker-1",
+        claim_attempt_count=claimed.attempt_count,
         error_code="download_error",
         message="Could not fetch media",
     )
@@ -310,18 +313,21 @@ def test_stale_worker_cannot_mutate_job_after_requeue_and_reclaim(tmp_path):
     completed = store.mark_completed(
         created.job_id,
         worker_id="worker-a",
+        claim_attempt_count=claimed_by_a.attempt_count,
         artifact_dir="artifacts/reclaimed",
         message="stale worker completion",
     )
     heartbeated = store.heartbeat(
         created.job_id,
         worker_id="worker-a",
+        claim_attempt_count=claimed_by_a.attempt_count,
         stage="transcribing",
         message="stale heartbeat",
     )
     failed = store.mark_failed(
         created.job_id,
         worker_id="worker-a",
+        claim_attempt_count=claimed_by_a.attempt_count,
         error_code="stale",
         message="stale failure",
     )
@@ -336,3 +342,54 @@ def test_stale_worker_cannot_mutate_job_after_requeue_and_reclaim(tmp_path):
     assert refreshed.progress_stage == "claimed"
     assert refreshed.status_message == "Claimed by worker worker-b"
     assert refreshed.worker_id == "worker-b"
+
+
+def test_same_worker_id_cannot_mutate_job_with_stale_claim_attempt(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite3")
+    created = store.create_job(
+        youtube_url="https://youtu.be/same-worker",
+        display_title="Same Worker",
+        language_hint=None,
+    )
+
+    first_claim = store.claim_next_job(
+        worker_id="worker-1",
+        heartbeat_timeout_seconds=30,
+    )
+    assert first_claim is not None
+
+    stale_time = datetime.now(timezone.utc) - timedelta(seconds=120)
+    with sqlite3.connect(tmp_path / "jobs.sqlite3") as conn:
+        conn.execute(
+            "UPDATE jobs SET last_heartbeat_at = ? WHERE job_id = ?",
+            (stale_time.isoformat(), created.job_id),
+        )
+        conn.commit()
+
+    assert store.requeue_stale_jobs(heartbeat_timeout_seconds=30) == 1
+
+    second_claim = store.claim_next_job(
+        worker_id="worker-1",
+        heartbeat_timeout_seconds=30,
+    )
+    assert second_claim is not None
+    assert second_claim.job_id == created.job_id
+    assert second_claim.attempt_count == first_claim.attempt_count + 1
+
+    stale_completion = store.mark_completed(
+        created.job_id,
+        worker_id="worker-1",
+        claim_attempt_count=first_claim.attempt_count,
+        artifact_dir="artifacts/same-worker",
+        message="stale same worker completion",
+    )
+
+    refreshed = store.get_job(created.job_id)
+
+    assert stale_completion is False
+    assert refreshed is not None
+    assert refreshed.status == "running"
+    assert refreshed.progress_stage == "claimed"
+    assert refreshed.status_message == "Claimed by worker worker-1"
+    assert refreshed.worker_id == "worker-1"
+    assert refreshed.attempt_count == second_claim.attempt_count

@@ -50,10 +50,14 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
 def _migrate_nullable_display_title(conn: sqlite3.Connection) -> None:
     columns = conn.execute("PRAGMA table_info(jobs)").fetchall()
     display_title_column = next(
-        (column for column in columns if column["name"] == "display_title"),
+        (
+            column
+            for column in columns
+            if _pragma_table_info_value(column, "name", 1) == "display_title"
+        ),
         None,
     )
-    if display_title_column is None or display_title_column["notnull"] == 0:
+    if display_title_column is None or _pragma_table_info_value(display_title_column, "notnull", 3) == 0:
         return
 
     conn.execute("ALTER TABLE jobs RENAME TO jobs__legacy_display_title_not_null")
@@ -120,3 +124,13 @@ def _migrate_nullable_display_title(conn: sqlite3.Connection) -> None:
         """
     )
     conn.execute("DROP TABLE jobs__legacy_display_title_not_null")
+
+
+def _pragma_table_info_value(
+    column: sqlite3.Row | tuple[object, ...],
+    key: str,
+    index: int,
+) -> object:
+    if isinstance(column, sqlite3.Row):
+        return column[key]
+    return column[index]

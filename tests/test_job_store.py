@@ -88,6 +88,86 @@ def test_ensure_schema_creates_jobs_table(tmp_path):
     }
 
 
+def test_ensure_schema_supports_plain_sqlite_connection(tmp_path):
+    db_path = tmp_path / "plain.sqlite3"
+
+    with sqlite3.connect(db_path) as conn:
+        ensure_schema(conn)
+        columns = conn.execute("PRAGMA table_info(jobs)").fetchall()
+
+    display_title_column = next(column for column in columns if column[1] == "display_title")
+
+    assert display_title_column[3] == 0
+
+
+def test_ensure_schema_upgrades_not_null_display_title_schema(tmp_path):
+    db_path = tmp_path / "legacy.sqlite3"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE jobs (
+                job_id TEXT PRIMARY KEY,
+                youtube_url TEXT NOT NULL,
+                display_title TEXT NOT NULL,
+                language_hint TEXT,
+                status TEXT NOT NULL,
+                progress_stage TEXT NOT NULL,
+                status_message TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                last_heartbeat_at TEXT,
+                worker_id TEXT,
+                last_error_code TEXT,
+                last_error_message TEXT,
+                artifact_dir TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO jobs (
+                job_id,
+                youtube_url,
+                display_title,
+                language_hint,
+                status,
+                progress_stage,
+                status_message,
+                attempt_count,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-job",
+                "https://youtu.be/legacy",
+                "Legacy Title",
+                None,
+                "queued",
+                "queued",
+                "Queued",
+                0,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+
+    with sqlite3.connect(db_path) as conn:
+        ensure_schema(conn)
+        columns = conn.execute("PRAGMA table_info(jobs)").fetchall()
+        copied_row = conn.execute(
+            "SELECT job_id, display_title FROM jobs WHERE job_id = ?",
+            ("legacy-job",),
+        ).fetchone()
+
+    display_title_column = next(column for column in columns if column[1] == "display_title")
+
+    assert display_title_column[3] == 0
+    assert copied_row == ("legacy-job", "Legacy Title")
+
+
 def test_create_job_and_read_it_back(tmp_path):
     store = JobStore(tmp_path / "jobs.sqlite3")
 

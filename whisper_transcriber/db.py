@@ -60,70 +60,79 @@ def _migrate_nullable_display_title(conn: sqlite3.Connection) -> None:
     if display_title_column is None or _pragma_table_info_value(display_title_column, "notnull", 3) == 0:
         return
 
-    conn.execute("ALTER TABLE jobs RENAME TO jobs__legacy_display_title_not_null")
-    conn.execute(
-        """
-        CREATE TABLE jobs (
-            job_id TEXT PRIMARY KEY,
-            youtube_url TEXT NOT NULL,
-            display_title TEXT,
-            language_hint TEXT,
-            status TEXT NOT NULL,
-            progress_stage TEXT NOT NULL,
-            status_message TEXT NOT NULL,
-            attempt_count INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL,
-            started_at TEXT,
-            finished_at TEXT,
-            last_heartbeat_at TEXT,
-            worker_id TEXT,
-            last_error_code TEXT,
-            last_error_message TEXT,
-            artifact_dir TEXT
+    savepoint_name = "migrate_nullable_display_title"
+    conn.execute(f"SAVEPOINT {savepoint_name}")
+    try:
+        conn.execute("ALTER TABLE jobs RENAME TO jobs__legacy_display_title_not_null")
+        conn.execute(
+            """
+            CREATE TABLE jobs (
+                job_id TEXT PRIMARY KEY,
+                youtube_url TEXT NOT NULL,
+                display_title TEXT,
+                language_hint TEXT,
+                status TEXT NOT NULL,
+                progress_stage TEXT NOT NULL,
+                status_message TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                last_heartbeat_at TEXT,
+                worker_id TEXT,
+                last_error_code TEXT,
+                last_error_message TEXT,
+                artifact_dir TEXT
+            )
+            """
         )
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO jobs (
-            job_id,
-            youtube_url,
-            display_title,
-            language_hint,
-            status,
-            progress_stage,
-            status_message,
-            attempt_count,
-            created_at,
-            started_at,
-            finished_at,
-            last_heartbeat_at,
-            worker_id,
-            last_error_code,
-            last_error_message,
-            artifact_dir
+        conn.execute(
+            """
+            INSERT INTO jobs (
+                job_id,
+                youtube_url,
+                display_title,
+                language_hint,
+                status,
+                progress_stage,
+                status_message,
+                attempt_count,
+                created_at,
+                started_at,
+                finished_at,
+                last_heartbeat_at,
+                worker_id,
+                last_error_code,
+                last_error_message,
+                artifact_dir
+            )
+            SELECT
+                job_id,
+                youtube_url,
+                display_title,
+                language_hint,
+                status,
+                progress_stage,
+                status_message,
+                attempt_count,
+                created_at,
+                started_at,
+                finished_at,
+                last_heartbeat_at,
+                worker_id,
+                last_error_code,
+                last_error_message,
+                artifact_dir
+            FROM jobs__legacy_display_title_not_null
+            """
         )
-        SELECT
-            job_id,
-            youtube_url,
-            display_title,
-            language_hint,
-            status,
-            progress_stage,
-            status_message,
-            attempt_count,
-            created_at,
-            started_at,
-            finished_at,
-            last_heartbeat_at,
-            worker_id,
-            last_error_code,
-            last_error_message,
-            artifact_dir
-        FROM jobs__legacy_display_title_not_null
-        """
-    )
-    conn.execute("DROP TABLE jobs__legacy_display_title_not_null")
+        conn.execute("DROP TABLE jobs__legacy_display_title_not_null")
+    except Exception:
+        conn.execute(f"ROLLBACK TO SAVEPOINT {savepoint_name}")
+        conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
+        raise
+
+    conn.execute(f"RELEASE SAVEPOINT {savepoint_name}")
 
 
 def _pragma_table_info_value(

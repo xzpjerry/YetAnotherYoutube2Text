@@ -4,6 +4,8 @@ import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from whisper_transcriber.config import load_settings
 from whisper_transcriber.db import connect_db, ensure_schema
 from whisper_transcriber.job_store import JobStore
@@ -165,6 +167,97 @@ def test_ensure_schema_upgrades_not_null_display_title_schema(tmp_path):
     display_title_column = next(column for column in columns if column[1] == "display_title")
 
     assert display_title_column[3] == 0
+    assert copied_row == ("legacy-job", "Legacy Title")
+
+
+def test_ensure_schema_rolls_back_display_title_migration_on_failure(tmp_path):
+    db_path = tmp_path / "legacy-rollback.sqlite3"
+
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE jobs (
+                job_id TEXT PRIMARY KEY,
+                youtube_url TEXT NOT NULL,
+                display_title TEXT NOT NULL,
+                language_hint TEXT,
+                status TEXT NOT NULL,
+                progress_stage TEXT NOT NULL,
+                status_message TEXT NOT NULL,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                finished_at TEXT,
+                last_heartbeat_at TEXT,
+                worker_id TEXT,
+                last_error_code TEXT,
+                last_error_message TEXT,
+                artifact_dir TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO jobs (
+                job_id,
+                youtube_url,
+                display_title,
+                language_hint,
+                status,
+                progress_stage,
+                status_message,
+                attempt_count,
+                created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "legacy-job",
+                "https://youtu.be/legacy",
+                "Legacy Title",
+                None,
+                "queued",
+                "queued",
+                "Queued",
+                0,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+
+        class FailingConnection:
+            def __init__(self, wrapped: sqlite3.Connection) -> None:
+                self._wrapped = wrapped
+
+            def execute(self, sql: str, parameters: object = ()) -> sqlite3.Cursor:
+                if "INSERT INTO jobs (" in sql:
+                    raise sqlite3.OperationalError("simulated copy failure")
+                return self._wrapped.execute(sql, parameters)
+
+            def commit(self) -> None:
+                self._wrapped.commit()
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self._wrapped, name)
+
+        with pytest.raises(sqlite3.OperationalError, match="simulated copy failure"):
+            ensure_schema(FailingConnection(conn))
+
+        tables = {
+            row[0]
+            for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        columns = conn.execute("PRAGMA table_info(jobs)").fetchall()
+        copied_row = conn.execute(
+            "SELECT job_id, display_title FROM jobs WHERE job_id = ?",
+            ("legacy-job",),
+        ).fetchone()
+
+    display_title_column = next(column for column in columns if column[1] == "display_title")
+
+    assert "jobs__legacy_display_title_not_null" not in tables
+    assert display_title_column[3] == 1
     assert copied_row == ("legacy-job", "Legacy Title")
 
 

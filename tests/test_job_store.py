@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import threading
 from datetime import datetime, timedelta, timezone
 
 from whisper_transcriber.config import load_settings
@@ -17,6 +18,7 @@ def test_load_settings_uses_expected_defaults(tmp_path, monkeypatch):
         "MAX_ARTIFACT_AGE_HOURS",
         "MAX_ARTIFACTS",
         "WORKER_POLL_SECONDS",
+        "WORKER_HEARTBEAT_SECONDS",
         "HEARTBEAT_SECONDS",
     ):
         monkeypatch.delenv(key, raising=False)
@@ -30,6 +32,20 @@ def test_load_settings_uses_expected_defaults(tmp_path, monkeypatch):
     assert settings.max_artifacts == 100
     assert settings.worker_poll_seconds == 2
     assert settings.heartbeat_seconds == 5
+
+
+def test_load_settings_prefers_worker_heartbeat_seconds_with_legacy_fallback():
+    settings = load_settings(
+        {
+            "WORKER_HEARTBEAT_SECONDS": "7.5",
+            "HEARTBEAT_SECONDS": "11",
+        }
+    )
+
+    fallback_settings = load_settings({"HEARTBEAT_SECONDS": "9"})
+
+    assert settings.heartbeat_seconds == 7.5
+    assert fallback_settings.heartbeat_seconds == 9
 
 
 def test_load_settings_with_explicit_empty_mapping_uses_defaults(monkeypatch):
@@ -93,6 +109,39 @@ def test_create_job_and_read_it_back(tmp_path):
     assert created.language_hint == "en"
     assert fetched == created
     assert recent == [created]
+
+
+def test_create_job_allows_missing_display_title_until_completion(tmp_path):
+    store = JobStore(tmp_path / "jobs.sqlite3")
+
+    created = store.create_job(
+        youtube_url="https://youtu.be/title-later",
+        display_title=None,
+        language_hint=None,
+    )
+    claimed = store.claim_next_job(
+        worker_id="worker-1",
+        heartbeat_timeout_seconds=30,
+    )
+
+    assert claimed is not None
+
+    completed = store.mark_completed(
+        created.job_id,
+        worker_id="worker-1",
+        claim_attempt_count=claimed.attempt_count,
+        artifact_dir="artifacts/title-later",
+        display_title="Recovered Title",
+        message="Done",
+    )
+
+    refreshed = store.get_job(created.job_id)
+
+    assert created.display_title is None
+    assert completed is True
+    assert refreshed is not None
+    assert refreshed.display_title == "Recovered Title"
+    assert refreshed.status == "completed"
 
 
 def test_claim_next_job_marks_oldest_queued_job_running_atomically(tmp_path):
@@ -232,6 +281,7 @@ def test_mark_completed_records_artifact_dir_and_finish_time(tmp_path):
         worker_id="worker-1",
         claim_attempt_count=claimed.attempt_count,
         artifact_dir="artifacts/completed-job",
+        display_title="Completed",
         message="Done",
     )
 
@@ -243,6 +293,7 @@ def test_mark_completed_records_artifact_dir_and_finish_time(tmp_path):
     assert refreshed.progress_stage == "completed"
     assert refreshed.status_message == "Done"
     assert refreshed.artifact_dir == "artifacts/completed-job"
+    assert refreshed.display_title == "Completed"
     assert refreshed.finished_at is not None
 
 
@@ -393,3 +444,51 @@ def test_same_worker_id_cannot_mutate_job_with_stale_claim_attempt(tmp_path):
     assert refreshed.status_message == "Claimed by worker worker-1"
     assert refreshed.worker_id == "worker-1"
     assert refreshed.attempt_count == second_claim.attempt_count
+
+
+def test_two_claimers_contend_for_one_job_on_same_sqlite_file(tmp_path):
+    db_path = tmp_path / "jobs.sqlite3"
+    setup_store = JobStore(db_path)
+    queued = setup_store.create_job(
+        youtube_url="https://youtu.be/contended",
+        display_title=None,
+        language_hint=None,
+    )
+
+    barrier = threading.Barrier(3)
+    claims: list[tuple[str, str | None]] = []
+    errors: list[BaseException] = []
+
+    def contender(worker_id: str) -> None:
+        store = JobStore(db_path)
+        try:
+            barrier.wait()
+            claimed = store.claim_next_job(
+                worker_id=worker_id,
+                heartbeat_timeout_seconds=30,
+            )
+            claims.append((worker_id, None if claimed is None else claimed.job_id))
+        except BaseException as exc:  # pragma: no cover - assertion path
+            errors.append(exc)
+
+    first = threading.Thread(target=contender, args=("worker-a",))
+    second = threading.Thread(target=contender, args=("worker-b",))
+
+    first.start()
+    second.start()
+    barrier.wait()
+    first.join()
+    second.join()
+
+    refreshed = setup_store.get_job(queued.job_id)
+    winners = [worker_id for worker_id, job_id in claims if job_id == queued.job_id]
+    losers = [worker_id for worker_id, job_id in claims if job_id is None]
+
+    assert errors == []
+    assert len(claims) == 2
+    assert len(winners) == 1
+    assert len(losers) == 1
+    assert refreshed is not None
+    assert refreshed.status == "running"
+    assert refreshed.attempt_count == 1
+    assert refreshed.worker_id == winners[0]

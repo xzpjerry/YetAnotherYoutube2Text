@@ -17,7 +17,7 @@ def utc_now() -> datetime:
 class JobRecord:
     job_id: str
     youtube_url: str
-    display_title: str
+    display_title: str | None
     language_hint: str | None
     status: str
     progress_stage: str
@@ -42,8 +42,8 @@ class JobStore:
     def create_job(
         self,
         youtube_url: str,
-        display_title: str,
-        language_hint: str | None,
+        display_title: str | None = None,
+        language_hint: str | None = None,
     ) -> JobRecord:
         now = utc_now().isoformat()
         job_id = uuid.uuid4().hex
@@ -186,23 +186,27 @@ class JobStore:
         worker_id: str,
         claim_attempt_count: int,
         artifact_dir: str | None,
+        display_title: str | None = None,
         message: str = "Completed",
     ) -> bool:
         now = utc_now().isoformat()
+        fields: dict[str, str | None] = {
+            "status": "completed",
+            "progress_stage": "completed",
+            "status_message": message,
+            "finished_at": now,
+            "last_heartbeat_at": now,
+            "artifact_dir": artifact_dir,
+        }
+        if display_title is not None:
+            fields["display_title"] = display_title
         with connect_db(self.db_path) as conn:
             return _update_owned_running_job(
                 conn,
                 job_id=job_id,
                 worker_id=worker_id,
                 claim_attempt_count=claim_attempt_count,
-                fields={
-                    "status": "completed",
-                    "progress_stage": "completed",
-                    "status_message": message,
-                    "finished_at": now,
-                    "last_heartbeat_at": now,
-                    "artifact_dir": artifact_dir,
-                },
+                fields=fields,
             )
 
     def mark_failed(

@@ -141,6 +141,11 @@ def test_run_job_classifies_download_failures_as_typed_pipeline_errors(tmp_path)
             media=FailingMediaPipeline(),
         )
 
+    assert exc_info.value.error_code == "download_error"
     assert exc_info.value.code == "download_error"
     assert exc_info.value.stage == "downloading"
+    assert (
+        exc_info.value.user_message
+        == "Unable to download audio from the provided URL."
+    )
     assert isinstance(exc_info.value.__cause__, RuntimeError)

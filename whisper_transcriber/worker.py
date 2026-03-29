@@ -74,15 +74,16 @@ def main(
     resolved_settings = settings or load_settings()
     resolved_store = store or JobStore(resolved_settings.db_path)
     resolved_worker_id = worker_id or uuid.uuid4().hex
+    lease_timeout_seconds = int(resolved_settings.heartbeat_seconds * 3)
 
-    resolved_store.requeue_stale_jobs(resolved_settings.heartbeat_seconds)
+    resolved_store.requeue_stale_jobs(lease_timeout_seconds)
 
     try:
         while True:
             processed = process_one_job(
                 store=resolved_store,
                 worker_id=resolved_worker_id,
-                heartbeat_timeout_seconds=resolved_settings.heartbeat_seconds,
+                heartbeat_timeout_seconds=lease_timeout_seconds,
                 artifacts_root=resolved_settings.artifacts_dir,
                 media=media,
             )
@@ -112,4 +113,3 @@ def _make_progress_callback(
             raise RuntimeError("job heartbeat rejected")
 
     return progress_callback
-

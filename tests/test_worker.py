@@ -363,20 +363,38 @@ def test_main_requeues_stale_jobs_on_startup_and_sleeps_when_idle(tmp_path):
         )
         conn.commit()
 
+    class RecordingStore:
+        def __init__(self, wrapped):
+            self.wrapped = wrapped
+            self.requeue_calls: list[float] = []
+
+        def requeue_stale_jobs(self, heartbeat_timeout_seconds: float) -> int:
+            self.requeue_calls.append(heartbeat_timeout_seconds)
+            return self.wrapped.requeue_stale_jobs(heartbeat_timeout_seconds)
+
+        def get_job(self, job_id: str):
+            return self.wrapped.get_job(job_id)
+
     sleep_calls: list[float] = []
 
     def fake_sleep(seconds: float) -> None:
         sleep_calls.append(seconds)
         raise KeyboardInterrupt
 
-    process_calls: list[tuple[str, str, float, Path]] = []
+    process_calls: list[tuple[str, float, Path]] = []
 
-    def fake_process_one_job(*, store, worker_id: str, heartbeat_timeout_seconds: float, artifacts_root: Path, media=None):
-        process_calls.append(
-            (worker_id, str(heartbeat_timeout_seconds), heartbeat_timeout_seconds, Path(artifacts_root))
-        )
+    def fake_process_one_job(
+        *,
+        store,
+        worker_id: str,
+        heartbeat_timeout_seconds: float,
+        artifacts_root: Path,
+        media=None,
+    ):
+        process_calls.append((worker_id, heartbeat_timeout_seconds, Path(artifacts_root)))
         return False
 
+    recording_store = RecordingStore(store)
     original_process_one_job = worker_module.process_one_job
     worker_module.process_one_job = fake_process_one_job
     try:
@@ -387,19 +405,20 @@ def test_main_requeues_stale_jobs_on_startup_and_sleeps_when_idle(tmp_path):
                 heartbeat_seconds=30,
                 worker_poll_seconds=0.25,
             ),
-            store=store,
+            store=recording_store,
             worker_id="worker-main",
             sleep_fn=fake_sleep,
         )
     finally:
         worker_module.process_one_job = original_process_one_job
 
-    refreshed = store.get_job(created.job_id)
+    refreshed = recording_store.get_job(created.job_id)
 
     assert exit_code == 0
     assert process_calls == [
-        ("worker-main", "30", 30, tmp_path / "artifacts"),
+        ("worker-main", 90, tmp_path / "artifacts"),
     ]
+    assert recording_store.requeue_calls == [90]
     assert sleep_calls == [0.25]
     assert refreshed is not None
     assert refreshed.status == "queued"
@@ -409,4 +428,3 @@ def test_main_requeues_stale_jobs_on_startup_and_sleeps_when_idle(tmp_path):
     assert refreshed.started_at is None
     assert refreshed.last_heartbeat_at is None
     assert refreshed.attempt_count == 1
-

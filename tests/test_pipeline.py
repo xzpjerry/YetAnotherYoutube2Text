@@ -192,3 +192,45 @@ def test_run_job_classifies_artifact_setup_failures_as_persistence_errors(tmp_pa
         == "Unable to write transcription artifacts."
     )
     assert isinstance(exc_info.value.__cause__, OSError)
+
+
+def test_run_job_classifies_progress_callback_failures_as_persistence_errors(tmp_path):
+    errors_module = _load_module("whisper_transcriber.errors")
+    media_module = _load_module("whisper_transcriber.media")
+    pipeline_module = _load_module("whisper_transcriber.pipeline")
+
+    class FakeMediaPipeline:
+        def __init__(self) -> None:
+            self.download_called = False
+
+        def download_audio(self, youtube_url: str, working_dir: Path):
+            self.download_called = True
+            source_path = Path(working_dir) / "episode-source.webm"
+            source_path.write_bytes(b"source-audio")
+            return media_module.DownloadedMedia(
+                source_path=source_path,
+                title="Episode 01 / Intro",
+            )
+
+    media_pipeline = FakeMediaPipeline()
+
+    def fail_progress(stage: str, message: str) -> None:
+        raise OSError("heartbeat unavailable")
+
+    with pytest.raises(
+        errors_module.PersistenceError,
+        match="heartbeat unavailable",
+    ) as exc_info:
+        pipeline_module.run_job(
+            job_id="job-999",
+            youtube_url="https://youtu.be/example",
+            artifacts_root=tmp_path / "artifacts",
+            media=media_pipeline,
+            progress_callback=fail_progress,
+        )
+
+    assert media_pipeline.download_called is False
+    assert exc_info.value.error_code == "persistence_error"
+    assert exc_info.value.stage == "downloading"
+    assert exc_info.value.user_message == "Unable to persist job progress."
+    assert isinstance(exc_info.value.__cause__, OSError)

@@ -103,7 +103,14 @@ def _emit_progress(
     message: str,
 ) -> None:
     if progress_callback is not None:
-        progress_callback(stage, message)
+        try:
+            progress_callback(stage, message)
+        except Exception as exc:
+            raise PersistenceError(
+                str(exc),
+                stage=stage,
+                user_message="Unable to persist job progress.",
+            ) from exc
 
 
 def _run_boundary(

@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+{% block title %}Recent Jobs · Whisper Transcriber{% endblock %}
+
+{% block content %}
+  <section class="panel">
+    <div class="panel-head">
+      <div>
+        <h1>Recent jobs</h1>
+        <p class="lede">Latest queue activity for the trusted group behind the VPN.</p>
+      </div>
+      <a class="secondary" href="/">New job</a>
+    </div>
+
+    {% if jobs %}
+      <div class="job-list">
+        {% for job in jobs %}
+          <article class="job-row">
+            <div>
+              <div class="job-row-top">
+                <a class="job-title" href="/jobs/{{ job.job_id }}">
+                  {{ job.display_title or job.youtube_url }}
+                </a>
+                <span class="badge badge-{{ job.status }}">{{ job.status }}</span>
+              </div>
+              <div class="muted">{{ job.status_message }}</div>
+            </div>
+            <div class="job-meta">
+              <span>{{ job.progress_stage }}</span>
+              <span>{{ job.created_at }}</span>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">No jobs yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

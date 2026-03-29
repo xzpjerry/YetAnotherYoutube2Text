@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Whisper Transcriber{% endblock %}</title>
+    <link rel="stylesheet" href="/static/app.css">
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="shell header-inner">
+        <a class="brand" href="/">Whisper Transcriber</a>
+        <nav class="nav">
+          <a href="/">Submit</a>
+          <a href="/jobs">Jobs</a>
+          <a href="/healthz">Health</a>
+        </nav>
+      </div>
+    </header>
+    <main class="shell">
+      {% block content %}{% endblock %}
+    </main>
+    <script src="/static/job-status.js" defer></script>
+    {% block scripts %}{% endblock %}
+  </body>
+</html>

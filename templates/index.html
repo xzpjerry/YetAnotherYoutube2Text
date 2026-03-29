@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+
+{% block title %}Submit Job · Whisper Transcriber{% endblock %}
+
+{% block content %}
+  <section class="panel">
+    <h1>Submit a transcription job</h1>
+    <p class="lede">Paste a YouTube URL and the server will queue it for the worker.</p>
+
+    <form class="stack" method="post" action="/jobs">
+      <label class="field">
+        <span>YouTube URL</span>
+        <input name="youtube_url" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
+      </label>
+
+      <label class="field">
+        <span>Language hint</span>
+        <input name="language" type="text" placeholder="en, zh, ja">
+      </label>
+
+      <button class="primary" type="submit">Queue job</button>
+    </form>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>Recent jobs</h2>
+      <a href="/jobs">View all</a>
+    </div>
+
+    {% if recent_jobs %}
+      <div class="job-cards">
+        {% for job in recent_jobs %}
+          <a class="job-card" href="/jobs/{{ job.job_id }}">
+            <div class="job-card-top">
+              <strong>{{ job.display_title or job.youtube_url }}</strong>
+              <span class="badge badge-{{ job.status }}">{{ job.status }}</span>
+            </div>
+            <div class="muted">{{ job.status_message }}</div>
+          </a>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p class="muted">No jobs yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

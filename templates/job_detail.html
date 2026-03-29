@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+
+{% block title %}Job {{ job.job_id }} · Whisper Transcriber{% endblock %}
+
+{% block content %}
+  <section
+    class="panel"
+    data-job-panel
+    data-job-id="{{ job.job_id }}"
+    data-status-url="{{ api_url }}"
+    data-poll-interval="{{ poll_interval_ms }}"
+  >
+    <div class="panel-head">
+      <div>
+        <h1>{{ job.display_title or "Job " ~ job.job_id }}</h1>
+        <p class="lede">{{ job.youtube_url }}</p>
+      </div>
+      <span class="badge badge-{{ job.status }}" data-field="status">{{ job.status }}</span>
+    </div>
+
+    <dl class="job-grid">
+      <div>
+        <dt>Stage</dt>
+        <dd data-field="progress-stage">{{ job.progress_stage }}</dd>
+      </div>
+      <div>
+        <dt>Message</dt>
+        <dd data-field="status-message">{{ job.status_message }}</dd>
+      </div>
+      <div>
+        <dt>Language hint</dt>
+        <dd>{{ job.language_hint or "None" }}</dd>
+      </div>
+      <div>
+        <dt>Attempts</dt>
+        <dd>{{ job.attempt_count }}</dd>
+      </div>
+      <div>
+        <dt>Created</dt>
+        <dd>{{ job.created_at }}</dd>
+      </div>
+      <div>
+        <dt>Started</dt>
+        <dd>{{ job.started_at or "Pending" }}</dd>
+      </div>
+      <div>
+        <dt>Finished</dt>
+        <dd>{{ job.finished_at or "Pending" }}</dd>
+      </div>
+      <div>
+        <dt>Artifact dir</dt>
+        <dd>{{ job.artifact_dir or "Not ready" }}</dd>
+      </div>
+    </dl>
+
+    <section class="panel-subsection">
+      <div class="panel-head">
+        <h2>Artifacts</h2>
+        {% if job.artifact_links %}
+          <span class="muted">Available on disk</span>
+        {% endif %}
+      </div>
+      <ul class="artifact-list" data-field="artifact-links">
+        {% for link in artifact_links %}
+          <li>
+            <a href="{{ link.href }}">{{ link.label }}</a>
+            {% if link.copyable %}
+              <button
+                type="button"
+                class="ghost"
+                data-copy-url="{{ link.href }}"
+                data-copy-label="{{ link.label }}"
+              >
+                Copy text
+              </button>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+
+    {% if preview %}
+      <section class="panel-subsection">
+        <h2>Transcript preview</h2>
+        <pre class="preview" data-field="preview">{{ preview }}</pre>
+      </section>
+    {% endif %}
+  </section>
+{% endblock %}

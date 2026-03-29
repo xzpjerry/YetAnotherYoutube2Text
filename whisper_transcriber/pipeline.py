@@ -52,7 +52,10 @@ def run_job(
             lambda: media_pipeline.download_audio(youtube_url, working_dir),
         )
 
-        artifacts = prepare_job_artifacts(artifacts_root, job_id)
+        artifacts = _run_boundary(
+            PersistenceError,
+            lambda: prepare_job_artifacts(artifacts_root, job_id),
+        )
 
         _emit_progress(progress_callback, "converting", "Converting source audio")
         converted_audio_path = _run_boundary(

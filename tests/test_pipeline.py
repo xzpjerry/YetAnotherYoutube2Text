@@ -149,3 +149,46 @@ def test_run_job_classifies_download_failures_as_typed_pipeline_errors(tmp_path)
         == "Unable to download audio from the provided URL."
     )
     assert isinstance(exc_info.value.__cause__, RuntimeError)
+
+
+def test_run_job_classifies_artifact_setup_failures_as_persistence_errors(tmp_path):
+    errors_module = _load_module("whisper_transcriber.errors")
+    media_module = _load_module("whisper_transcriber.media")
+    pipeline_module = _load_module("whisper_transcriber.pipeline")
+
+    class FakeMediaPipeline:
+        def download_audio(self, youtube_url: str, working_dir: Path):
+            source_path = Path(working_dir) / "episode-source.webm"
+            source_path.write_bytes(b"source-audio")
+            return media_module.DownloadedMedia(
+                source_path=source_path,
+                title="Episode 01 / Intro",
+            )
+
+    original_prepare_job_artifacts = pipeline_module.prepare_job_artifacts
+
+    def fail_prepare_job_artifacts(*args, **kwargs):
+        raise OSError("artifact root unavailable")
+
+    pipeline_module.prepare_job_artifacts = fail_prepare_job_artifacts
+    try:
+        with pytest.raises(
+            errors_module.PersistenceError,
+            match="artifact root unavailable",
+        ) as exc_info:
+            pipeline_module.run_job(
+                job_id="job-789",
+                youtube_url="https://youtu.be/example",
+                artifacts_root=tmp_path / "artifacts",
+                media=FakeMediaPipeline(),
+            )
+    finally:
+        pipeline_module.prepare_job_artifacts = original_prepare_job_artifacts
+
+    assert exc_info.value.error_code == "persistence_error"
+    assert exc_info.value.stage == "writing"
+    assert (
+        exc_info.value.user_message
+        == "Unable to write transcription artifacts."
+    )
+    assert isinstance(exc_info.value.__cause__, OSError)
